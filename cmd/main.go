@@ -14,8 +14,9 @@ import (
 )
 
 type QueueItem struct {
-	Username string
-	UserID   int
+	Username  string
+	UserID    int
+	MessageID int // Store the message ID of the join command
 }
 
 var queues = make(map[int64][]QueueItem)
@@ -96,8 +97,9 @@ func handleJoin(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
 	}
 
 	queues[chatID] = append(queues[chatID], QueueItem{
-		Username: message.From.FirstName + " (@" + message.From.UserName + ")",
-		UserID:   userID,
+		Username:  message.From.FirstName + " (@" + message.From.UserName + ")",
+		UserID:    userID,
+		MessageID: message.MessageID, // Store the join command message ID
 	})
 
 	response := fmt.Sprintf("%s занял очередь.", message.From.FirstName)
@@ -125,16 +127,20 @@ func startNextUser(bot *tgbotapi.BotAPI, chatID int64) {
 	endTime := startTime.Add(10 * time.Minute)
 
 	var nextInQueueMessage string
+	var replyToMessageID int
 	if len(queues[chatID]) > 0 {
 		nextInQueue := queues[chatID][0]
 		nextInQueueMessage = fmt.Sprintf("Следующий в очереди: %s", nextInQueue.Username)
+		replyToMessageID = nextInQueue.MessageID // Get the message ID of the next user's join command
 	} else {
 		nextInQueueMessage = "Очередь пуста."
+		replyToMessageID = firstInQueue.MessageID // Reply to the first user's join command
 	}
 
 	response := fmt.Sprintf("%s начал отсчёт времени.\nПромежуток: %s - %s\n%s", firstInQueue.Username, startTime.Format("15:04:05"), endTime.Format("15:04:05"), nextInQueueMessage)
 	msg := tgbotapi.NewMessage(chatID, response)
 	msg.ReplyMarkup = getCommandButtons()
+	msg.ReplyToMessageID = replyToMessageID // Set the reply to the correct message ID
 	bot.Send(msg)
 
 	time.AfterFunc(10*time.Minute, func() {
@@ -282,7 +288,6 @@ func getCommandButtons() tgbotapi.ReplyKeyboardMarkup {
 			tgbotapi.NewKeyboardButton("/queue"),
 		),
 		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("/remove"),
 			tgbotapi.NewKeyboardButton("/help"),
 		),
 	)
