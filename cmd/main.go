@@ -26,7 +26,7 @@ var countdownCancelFuncs = make(map[int64]context.CancelFunc)
 var mu sync.Mutex
 
 func main() {
-	bot, err := tgbotapi.NewBotAPI("YOUR_BOT_API_KEY")
+	bot, err := tgbotapi.NewBotAPI("7430878489:AAHPTQWwgliaE7J45N7CZkoYxwN-UUhj42c")
 	if err != nil {
 		log.Panic(err)
 	}
