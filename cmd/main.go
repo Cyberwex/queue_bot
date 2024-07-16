@@ -275,15 +275,15 @@ func handleHelp(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
 func getCommandButtons() tgbotapi.ReplyKeyboardMarkup {
 	return tgbotapi.NewReplyKeyboard(
 		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("Занять очередь /join"),
+			tgbotapi.NewKeyboardButton("/join"),
 		),
 		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("Остановить отсчёт времени /stoptime"),
-			tgbotapi.NewKeyboardButton("Показать очередь /queue"),
+			tgbotapi.NewKeyboardButton("/stoptime"),
+			tgbotapi.NewKeyboardButton("/queue"),
 		),
 		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("Удалить из очереди /remove"),
-			tgbotapi.NewKeyboardButton("Помощь /help"),
+			tgbotapi.NewKeyboardButton("/remove 1"),
+			tgbotapi.NewKeyboardButton("/help"),
 		),
 	)
 }
