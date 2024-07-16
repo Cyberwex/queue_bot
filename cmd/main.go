@@ -105,8 +105,8 @@ func handleJoin(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
 	msg.ReplyMarkup = getCommandButtons()
 	bot.Send(msg)
 
-	// Automatically start the timer if the queue was empty
-	if len(queues[chatID]) == 1 {
+	// Automatically start the timer if the queue was empty and no active countdown
+	if len(queues[chatID]) == 1 && activeCountdowns[chatID].IsZero() {
 		startNextUser(bot, chatID)
 	}
 }
@@ -282,7 +282,7 @@ func getCommandButtons() tgbotapi.ReplyKeyboardMarkup {
 			tgbotapi.NewKeyboardButton("/queue"),
 		),
 		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("/remove 1"),
+			tgbotapi.NewKeyboardButton("/remove"),
 			tgbotapi.NewKeyboardButton("/help"),
 		),
 	)
