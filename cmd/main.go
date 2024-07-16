@@ -4,6 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,7 +26,7 @@ var countdownCancelFuncs = make(map[int64]context.CancelFunc)
 var mu sync.Mutex
 
 func main() {
-	bot, err := tgbotapi.NewBotAPI("7430878489:AAHPTQWwgliaE7J45N7CZkoYxwN-UUhj42c")
+	bot, err := tgbotapi.NewBotAPI("YOUR_BOT_API_KEY")
 	if err != nil {
 		log.Panic(err)
 	}
@@ -34,28 +38,47 @@ func main() {
 
 	updates, err := bot.GetUpdatesChan(u)
 
-	for update := range updates {
-		if update.Message == nil {
-			continue
-		}
+	go func() {
+		for update := range updates {
+			if update.Message == nil {
+				continue
+			}
 
-		if update.Message.IsCommand() {
-			switch update.Message.Command() {
-			case "start":
-				handleHelp(bot, update.Message)
-			case "join":
-				handleJoin(bot, update.Message)
-			case "stoptime":
-				handleStopTime(bot, update.Message)
-			case "queue":
-				handleQueue(bot, update.Message)
-			case "help":
-				handleHelp(bot, update.Message)
-			default:
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Я не знаю такую команду, вы можете воспользоваться /help чтобы посмотреть список поддерживаемых команд.")
-				bot.Send(msg)
+			if update.Message.IsCommand() {
+				switch update.Message.Command() {
+				case "start":
+					handleHelp(bot, update.Message)
+				case "join":
+					handleJoin(bot, update.Message)
+				case "stoptime":
+					handleStopTime(bot, update.Message)
+				case "queue":
+					handleQueue(bot, update.Message)
+				case "remove":
+					handleRemove(bot, update.Message)
+				case "help":
+					handleHelp(bot, update.Message)
+				default:
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Я не знаю такую команду, вы можете воспользоваться /help чтобы посмотреть список поддерживаемых команд.")
+					bot.Send(msg)
+				}
 			}
 		}
+	}()
+
+	// Web server to satisfy Heroku's requirement
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "Hello, I'm alive!")
+	})
+
+	log.Printf("Listening on port %s", port)
+	if err := http.ListenAndServe(":"+port, nil); err != nil {
+		log.Fatal(err)
 	}
 }
 
@@ -198,6 +221,46 @@ func handleStopTime(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
 	bot.Send(msg)
 }
 
+func handleRemove(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
+	chatID := message.Chat.ID
+	args := strings.Split(message.CommandArguments(), " ")
+
+	if len(args) != 1 {
+		msg := tgbotapi.NewMessage(chatID, "Укажите номер позиции для удаления. Пример: /remove 2")
+		msg.ReplyMarkup = getCommandButtons()
+		bot.Send(msg)
+		return
+	}
+
+	position, err := strconv.Atoi(args[0])
+	if err != nil || position < 1 {
+		msg := tgbotapi.NewMessage(chatID, "Номер позиции должен быть положительным целым числом.")
+		msg.ReplyMarkup = getCommandButtons()
+		bot.Send(msg)
+		return
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if position > len(queues[chatID]) {
+		msg := tgbotapi.NewMessage(chatID, "Неверный номер позиции. Очередь не такая длинная.")
+		msg.ReplyMarkup = getCommandButtons()
+		bot.Send(msg)
+		return
+	}
+
+	removedUser := queues[chatID][position-1]
+	queues[chatID] = append(queues[chatID][:position-1], queues[chatID][position:]...)
+
+	response := fmt.Sprintf("Пользователь %s был удалён из очереди.", removedUser.Username)
+	msg := tgbotapi.NewMessage(chatID, response)
+	msg.ReplyMarkup = getCommandButtons()
+	bot.Send(msg)
+
+	handleQueue(bot, message)
+}
+
 func handleQueue(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
 	mu.Lock()
 	chatID := message.Chat.ID
@@ -226,6 +289,7 @@ func handleHelp(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
 		"/join - Занять очередь\n" +
 		"/stoptime - Остановить отсчёт времени (только пользователь, начавший отсчёт)\n" +
 		"/queue - Показать очередь\n" +
+		"/remove <номер> - Удалить из очереди по номеру\n" +
 		"/help - Показать доступные команды"
 
 	msg := tgbotapi.NewMessage(message.Chat.ID, response)
@@ -241,6 +305,7 @@ func getCommandButtons() tgbotapi.ReplyKeyboardMarkup {
 		),
 		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("Показать очередь /queue"),
+			tgbotapi.NewKeyboardButton("Удалить из очереди /remove"),
 		),
 		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("Помощь /help"),
