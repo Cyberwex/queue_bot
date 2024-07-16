@@ -1,10 +1,9 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
-	"net/http"
-	"os"
 	"sync"
 	"time"
 
@@ -19,6 +18,7 @@ type QueueItem struct {
 var queues = make(map[int64][]QueueItem)
 var activeCountdowns = make(map[int64]time.Time)
 var countdownOwners = make(map[int64]int)
+var countdownCancelFuncs = make(map[int64]context.CancelFunc)
 var mu sync.Mutex
 
 func main() {
@@ -34,46 +34,29 @@ func main() {
 
 	updates, err := bot.GetUpdatesChan(u)
 
-	go func() {
-		for update := range updates {
-			if update.Message == nil {
-				continue
-			}
+	for update := range updates {
+		if update.Message == nil {
+			continue
+		}
 
-			if update.Message.IsCommand() {
-				switch update.Message.Command() {
-				case "start":
-					handleHelp(bot, update.Message)
-				case "join":
-					handleJoin(bot, update.Message)
-				case "starttime":
-					handleStartTime(bot, update.Message)
-				case "stoptime":
-					handleStopTime(bot, update.Message)
-				case "queue":
-					handleQueue(bot, update.Message)
-				case "help":
-					handleHelp(bot, update.Message)
-				default:
-					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Я не знаю такую команду, вы можете воспользоваться /help чтобы посмотреть список поддерживаемых команд.")
-					bot.Send(msg)
-				}
+		if update.Message.IsCommand() {
+			switch update.Message.Command() {
+			case "start":
+				handleHelp(bot, update.Message)
+			case "join":
+				handleJoin(bot, update.Message)
+			case "stoptime":
+				handleStopTime(bot, update.Message)
+			case "queue":
+				handleQueue(bot, update.Message)
+			case "help":
+				handleHelp(bot, update.Message)
+			default:
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Я не знаю такую команду, вы можете воспользоваться /help чтобы посмотреть список поддерживаемых команд.")
+				bot.Send(msg)
 			}
 		}
-	}()
-
-	// Start the HTTP server
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
 	}
-
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "Bot is running")
-	})
-
-	log.Printf("Starting web server on port %s", port)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
 func handleJoin(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
@@ -87,6 +70,7 @@ func handleJoin(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
 	for _, item := range queues[chatID] {
 		if item.UserID == userID {
 			msg := tgbotapi.NewMessage(chatID, "Вы уже в очереди.")
+			msg.ReplyMarkup = getCommandButtons()
 			bot.Send(msg)
 			return
 		}
@@ -103,79 +87,77 @@ func handleJoin(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
 	bot.Send(msg)
 
 	go handleQueue(bot, message) // Automatically show the queue after joining
+
+	// Start the countdown automatically if this user is the first in the queue
+	if len(queues[chatID]) == 1 {
+		startCountdown(bot, chatID, queues[chatID][0])
+	}
 }
 
-func handleStartTime(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
+func startCountdown(bot *tgbotapi.BotAPI, chatID int64, user QueueItem) {
 	mu.Lock()
-	chatID := message.Chat.ID
-
-	if endTime, exists := activeCountdowns[chatID]; exists {
+	if _, exists := activeCountdowns[chatID]; exists {
 		mu.Unlock()
-		msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Невозможно начать новый отсчёт времени, пока не завершился текущий. Вы можете начать новый отсчёт в %s.", endTime.Format("15:04:05")))
-		msg.ReplyMarkup = getCommandButtons()
-		bot.Send(msg)
 		return
 	}
 
-	if len(queues[chatID]) == 0 {
-		mu.Unlock()
-		msg := tgbotapi.NewMessage(chatID, "Очередь пуста.")
-		msg.ReplyMarkup = getCommandButtons()
-		bot.Send(msg)
-		return
-	}
-
-	firstInQueue := queues[chatID][0]
-	if firstInQueue.UserID != message.From.ID {
-		mu.Unlock()
-		msg := tgbotapi.NewMessage(chatID, "Только первый в очереди может начать отсчёт времени.")
-		msg.ReplyMarkup = getCommandButtons()
-		bot.Send(msg)
-		return
-	}
-
-	queues[chatID] = queues[chatID][1:]
-	countdownOwners[chatID] = firstInQueue.UserID
+	countdownOwners[chatID] = user.UserID
 	activeCountdowns[chatID] = time.Now().Add(10 * time.Minute)
+
+	// Create a context with cancel function to manage the countdown
+	ctx, cancel := context.WithCancel(context.Background())
+	countdownCancelFuncs[chatID] = cancel
+	mu.Unlock()
 
 	startTime := time.Now()
 	endTime := startTime.Add(10 * time.Minute)
 
 	var nextInQueueMessage string
-	if len(queues[chatID]) > 0 {
-		nextInQueue := queues[chatID][0]
+	mu.Lock()
+	if len(queues[chatID]) > 1 {
+		nextInQueue := queues[chatID][1]
 		nextInQueueMessage = fmt.Sprintf("Следующий в очереди: %s", nextInQueue.Username)
 	} else {
 		nextInQueueMessage = "Очередь пуста."
 	}
+	mu.Unlock()
 
-	response := fmt.Sprintf("%s начал отсчёт времени.\nПромежуток: %s - %s\n%s", firstInQueue.Username, startTime.Format("15:04:05"), endTime.Format("15:04:05"), nextInQueueMessage)
+	response := fmt.Sprintf("%s начал отсчёт времени.\nПромежуток: %s - %s\n%s", user.Username, startTime.Format("15:04:05"), endTime.Format("15:04:05"), nextInQueueMessage)
 	msg := tgbotapi.NewMessage(chatID, response)
 	msg.ReplyMarkup = getCommandButtons()
 	bot.Send(msg)
 
-	mu.Unlock()
+	go func() {
+		select {
+		case <-ctx.Done():
+			// Countdown was stopped early
+			return
+		case <-time.After(10 * time.Minute):
+			mu.Lock()
+			defer mu.Unlock()
 
-	time.AfterFunc(10*time.Minute, func() {
-		mu.Lock()
-		defer mu.Unlock()
+			delete(activeCountdowns, chatID)
+			delete(countdownOwners, chatID)
+			delete(countdownCancelFuncs, chatID)
 
-		delete(activeCountdowns, chatID)
-		delete(countdownOwners, chatID)
+			if len(queues[chatID]) > 0 {
+				nextInQueue := queues[chatID][0]
+				queues[chatID] = queues[chatID][1:]
+				response := fmt.Sprintf("%s, ваше время истекло. Теперь очередь %s.", user.Username, nextInQueue.Username)
+				msg := tgbotapi.NewMessage(chatID, response)
+				msg.ReplyMarkup = getCommandButtons()
+				bot.Send(msg)
 
-		if len(queues[chatID]) > 0 {
-			nextInQueue := queues[chatID][0]
-			response := fmt.Sprintf("%s, ваше время истекло. Теперь очередь %s.", firstInQueue.Username, nextInQueue.Username)
-			msg := tgbotapi.NewMessage(chatID, response)
-			msg.ReplyMarkup = getCommandButtons()
-			bot.Send(msg)
-		} else {
-			response := fmt.Sprintf("%s, ваше время истекло. Очередь пуста.", firstInQueue.Username)
-			msg := tgbotapi.NewMessage(chatID, response)
-			msg.ReplyMarkup = getCommandButtons()
-			bot.Send(msg)
+				// Start the countdown for the next user in the queue
+				go startCountdown(bot, chatID, nextInQueue)
+			} else {
+				response := fmt.Sprintf("%s, ваше время истекло. Очередь пуста.", user.Username)
+				msg := tgbotapi.NewMessage(chatID, response)
+				msg.ReplyMarkup = getCommandButtons()
+				bot.Send(msg)
+			}
 		}
-	})
+	}()
 }
 
 func handleStopTime(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
@@ -192,6 +174,12 @@ func handleStopTime(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
 		return
 	}
 
+	// Cancel the countdown context
+	if cancel, exists := countdownCancelFuncs[chatID]; exists {
+		cancel()
+		delete(countdownCancelFuncs, chatID)
+	}
+
 	delete(activeCountdowns, chatID)
 	delete(countdownOwners, chatID)
 
@@ -199,6 +187,7 @@ func handleStopTime(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
 	if len(queues[chatID]) > 0 {
 		nextInQueue := queues[chatID][0]
 		nextInQueueMessage = fmt.Sprintf("Следующий в очереди: %s", nextInQueue.Username)
+		go startCountdown(bot, chatID, nextInQueue)
 	} else {
 		nextInQueueMessage = "Очередь пуста."
 	}
@@ -235,7 +224,6 @@ func handleQueue(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
 func handleHelp(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
 	response := "Доступные команды:\n" +
 		"/join - Занять очередь\n" +
-		"/starttime - Начать отсчёт времени (только первый в очереди)\n" +
 		"/stoptime - Остановить отсчёт времени (только пользователь, начавший отсчёт)\n" +
 		"/queue - Показать очередь\n" +
 		"/help - Показать доступные команды"
@@ -248,15 +236,14 @@ func handleHelp(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
 func getCommandButtons() tgbotapi.ReplyKeyboardMarkup {
 	return tgbotapi.NewReplyKeyboard(
 		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("/join"),
-			tgbotapi.NewKeyboardButton("/starttime"),
+			tgbotapi.NewKeyboardButton("Занять очередь /join"),
+			tgbotapi.NewKeyboardButton("Остановить отсчёт времени /stoptime"),
 		),
 		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("/stoptime"),
-			tgbotapi.NewKeyboardButton("/queue"),
+			tgbotapi.NewKeyboardButton("Показать очередь /queue"),
 		),
 		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("/help"),
+			tgbotapi.NewKeyboardButton("Помощь /help"),
 		),
 	)
 }
