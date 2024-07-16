@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"log"
+	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,7 +24,7 @@ var countdownOwners = make(map[int64]int)
 var mu sync.Mutex
 
 func main() {
-	bot, err := tgbotapi.NewBotAPI("YOUR_BOT_API_KEY")
+	bot, err := tgbotapi.NewBotAPI("7430878489:AAHPTQWwgliaE7J45N7CZkoYxwN-UUhj42c")
 	if err != nil {
 		log.Panic(err)
 	}
@@ -34,31 +36,46 @@ func main() {
 
 	updates, err := bot.GetUpdatesChan(u)
 
-	for update := range updates {
-		if update.Message == nil {
-			continue
-		}
+	go func() {
+		for update := range updates {
+			if update.Message == nil {
+				continue
+			}
 
-		if update.Message.IsCommand() {
-			switch update.Message.Command() {
-			case "start":
-				handleHelp(bot, update.Message)
-			case "join":
-				handleJoin(bot, update.Message)
-			case "stoptime":
-				handleStopTime(bot, update.Message)
-			case "queue":
-				handleQueue(bot, update.Message)
-			case "remove":
-				handleRemove(bot, update.Message)
-			case "help":
-				handleHelp(bot, update.Message)
-			default:
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Я не знаю такую команду, вы можете воспользоваться /help чтобы посмотреть список поддерживаемых команд.")
-				bot.Send(msg)
+			if update.Message.IsCommand() {
+				switch update.Message.Command() {
+				case "start":
+					handleHelp(bot, update.Message)
+				case "join":
+					handleJoin(bot, update.Message)
+				case "stoptime":
+					handleStopTime(bot, update.Message)
+				case "queue":
+					handleQueue(bot, update.Message)
+				case "remove":
+					handleRemove(bot, update.Message)
+				case "help":
+					handleHelp(bot, update.Message)
+				default:
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Я не знаю такую команду, вы можете воспользоваться /help чтобы посмотреть список поддерживаемых команд.")
+					bot.Send(msg)
+				}
 			}
 		}
+	}()
+
+	// Start HTTP server to listen on port provided by Heroku
+	port := os.Getenv("PORT")
+	if port == "" {
+		log.Fatal("$PORT must be set")
 	}
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "Bot is running.")
+	})
+
+	log.Printf("Listening on port %s", port)
+	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
 func handleJoin(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
