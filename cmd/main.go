@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"log"
+	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -32,31 +34,46 @@ func main() {
 
 	updates, err := bot.GetUpdatesChan(u)
 
-	for update := range updates {
-		if update.Message == nil {
-			continue
-		}
+	go func() {
+		for update := range updates {
+			if update.Message == nil {
+				continue
+			}
 
-		if update.Message.IsCommand() {
-			switch update.Message.Command() {
-			case "start":
-				handleHelp(bot, update.Message)
-			case "join":
-				handleJoin(bot, update.Message)
-			case "starttime":
-				handleStartTime(bot, update.Message)
-			case "stoptime":
-				handleStopTime(bot, update.Message)
-			case "queue":
-				handleQueue(bot, update.Message)
-			case "help":
-				handleHelp(bot, update.Message)
-			default:
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Я не знаю такую команду, вы можете воспользоваться /help чтобы посмотреть список поддерживаемых команд.")
-				bot.Send(msg)
+			if update.Message.IsCommand() {
+				switch update.Message.Command() {
+				case "start":
+					handleHelp(bot, update.Message)
+				case "join":
+					handleJoin(bot, update.Message)
+				case "starttime":
+					handleStartTime(bot, update.Message)
+				case "stoptime":
+					handleStopTime(bot, update.Message)
+				case "queue":
+					handleQueue(bot, update.Message)
+				case "help":
+					handleHelp(bot, update.Message)
+				default:
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Я не знаю такую команду, вы можете воспользоваться /help чтобы посмотреть список поддерживаемых команд.")
+					bot.Send(msg)
+				}
 			}
 		}
+	}()
+
+	// Start the HTTP server
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
 	}
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "Bot is running")
+	})
+
+	log.Printf("Starting web server on port %s", port)
+	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
 func handleJoin(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
@@ -82,7 +99,7 @@ func handleJoin(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
 
 	response := fmt.Sprintf("%s занял очередь.", message.From.FirstName)
 	msg := tgbotapi.NewMessage(chatID, response)
-	msg.ReplyMarkup = getCommandButtons()
+	msg.ReplyMarkup = getStartStopCommandButtons()
 	bot.Send(msg)
 
 	go handleQueue(bot, message) // Automatically show the queue after joining
@@ -134,7 +151,7 @@ func handleStartTime(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
 
 	response := fmt.Sprintf("%s начал отсчёт времени.\nПромежуток: %s - %s\n%s", firstInQueue.Username, startTime.Format("15:04:05"), endTime.Format("15:04:05"), nextInQueueMessage)
 	msg := tgbotapi.NewMessage(chatID, response)
-	msg.ReplyMarkup = getCommandButtons()
+	msg.ReplyMarkup = getStopCommandButtons()
 	bot.Send(msg)
 
 	mu.Unlock()
@@ -150,12 +167,10 @@ func handleStartTime(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
 			nextInQueue := queues[chatID][0]
 			response := fmt.Sprintf("%s, ваше время истекло. Теперь очередь %s.", firstInQueue.Username, nextInQueue.Username)
 			msg := tgbotapi.NewMessage(chatID, response)
-			msg.ReplyMarkup = getCommandButtons()
 			bot.Send(msg)
 		} else {
 			response := fmt.Sprintf("%s, ваше время истекло. Очередь пуста.", firstInQueue.Username)
 			msg := tgbotapi.NewMessage(chatID, response)
-			msg.ReplyMarkup = getCommandButtons()
 			bot.Send(msg)
 		}
 	})
@@ -228,18 +243,36 @@ func handleHelp(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
 	bot.Send(msg)
 }
 
-func getCommandButtons() tgbotapi.ReplyKeyboardMarkup {
-	return tgbotapi.NewReplyKeyboard(
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("/join"),
-			tgbotapi.NewKeyboardButton("/starttime"),
+func getCommandButtons() tgbotapi.InlineKeyboardMarkup {
+	return tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Занять очередь", "join"),
+			tgbotapi.NewInlineKeyboardButtonData("Показать очередь", "queue"),
 		),
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("/stoptime"),
-			tgbotapi.NewKeyboardButton("/queue"),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Помощь", "help"),
 		),
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("/help"),
+	)
+}
+
+func getStartStopCommandButtons() tgbotapi.InlineKeyboardMarkup {
+	return tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Начать отсчёт", "starttime"),
+			tgbotapi.NewInlineKeyboardButtonData("Остановить отсчёт", "stoptime"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Помощь", "help"),
+		),
+	)
+}
+func getStopCommandButtons() tgbotapi.InlineKeyboardMarkup {
+	return tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Остановить отсчёт", "stoptime"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Помощь", "help"),
 		),
 	)
 }
