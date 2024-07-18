@@ -123,7 +123,7 @@ func startNextUser(bot *tgbotapi.BotAPI, chatID int64) {
 	countdownOwners[chatID] = firstInQueue.UserID
 	activeCountdowns[chatID] = time.Now().Add(10 * time.Minute)
 
-	startTime := time.Now()
+	startTime := time.Now().In(time.FixedZone("UTC+4", 4*60*60))
 	endTime := startTime.Add(10 * time.Minute)
 
 	var nextInQueueMessage string
