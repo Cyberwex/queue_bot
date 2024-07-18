@@ -22,6 +22,7 @@ type QueueItem struct {
 var queues = make(map[int64][]QueueItem)
 var activeCountdowns = make(map[int64]time.Time)
 var countdownOwners = make(map[int64]int)
+var countdownTimers = make(map[int64]*time.Timer)
 var mu sync.Mutex
 
 func main() {
@@ -79,6 +80,8 @@ func main() {
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
+var timeZone = time.FixedZone("UTC+4", 4*60*60)
+
 func handleJoin(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -123,7 +126,7 @@ func startNextUser(bot *tgbotapi.BotAPI, chatID int64) {
 	countdownOwners[chatID] = firstInQueue.UserID
 	activeCountdowns[chatID] = time.Now().Add(10 * time.Minute)
 
-	startTime := time.Now().In(time.FixedZone("UTC+4", 4*60*60))
+	startTime := time.Now().In(timeZone)
 	endTime := startTime.Add(10 * time.Minute)
 
 	var nextInQueueMessage string
@@ -143,7 +146,11 @@ func startNextUser(bot *tgbotapi.BotAPI, chatID int64) {
 	msg.ReplyToMessageID = replyToMessageID // Set the reply to the correct message ID
 	bot.Send(msg)
 
-	time.AfterFunc(10*time.Minute, func() {
+	if timer, exists := countdownTimers[chatID]; exists {
+		timer.Stop()
+	}
+
+	countdownTimers[chatID] = time.AfterFunc(10*time.Minute, func() {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -154,6 +161,7 @@ func startNextUser(bot *tgbotapi.BotAPI, chatID int64) {
 
 		delete(activeCountdowns, chatID)
 		delete(countdownOwners, chatID)
+		delete(countdownTimers, chatID)
 
 		if len(queues[chatID]) > 0 {
 			nextInQueue := queues[chatID][0]
@@ -183,6 +191,11 @@ func handleStopTime(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
 		msg.ReplyMarkup = getCommandButtons()
 		bot.Send(msg)
 		return
+	}
+
+	if timer, exists := countdownTimers[chatID]; exists {
+		timer.Stop()
+		delete(countdownTimers, chatID)
 	}
 
 	delete(activeCountdowns, chatID)
